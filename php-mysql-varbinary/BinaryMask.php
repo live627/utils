@@ -1,98 +1,220 @@
-<?php
+class BinaryMask
+{
+	protected static int $indexOffset = 0;
 
-class BinaryMask {
-	public static function toBytes(array $bits, $shift = false, &$shifted = 0) {
-		$res = [];
-		$shifted = 0;
-		if (!$bits)
-			return [];
-		$minBit = min($bits);
-		if ($minBit < 0)
-			throw new Exception('Each element in the $bits array should be >=0');
-		$maxBit = max($bits);
-		if ($shift)
-			$shifted = (int) floor($minBit / 8);
-		$shiftedBits = $shifted * 8;
-		$sizeInBytes = (int) ceil(($maxBit + 1) / 8) - $shifted;
-		if (!$sizeInBytes)
-			return [];
-		$res = array_fill(0, $sizeInBytes, 0);
-		foreach ($bits as $bit) {
-			$bit = ((int) $bit) - $shiftedBits;
-			/*
-			// non-optimized code:
-			$byteIndex = $sizeInBytes - floor($bit / 8) - 1;
-			$bitPosition = $bit % 8;
-			$res[$byteIndex] |= 1 << $bitPosition;
-			continue;
-			*/
-			$res[$sizeInBytes - ((int) ($bit / 8)) - 1] |= 1 << ($bit % 8);
+	protected static array $binTable = [];
+
+	protected static array $hexTable = [];
+
+	protected static function initTables(): void
+	{
+		if (self::$binTable) {
+			return;
 		}
+
+		for ($i = 0; $i < 256; $i++) {
+			self::$binTable[$i] = sprintf('%08b', $i);
+			self::$hexTable[$i] = sprintf('%02x', $i);
+		}
+	}
+
+	/**
+	 * Convert bit indexes into byte array.
+	 *
+	 * @param array<int> $bits
+	 * @param bool $shift
+	 * @param int $shifted
+	 * @return array<int>
+	 */
+	public static function toBytes(
+		array $bits,
+		bool $shift = false,
+		int &$shifted = 0
+	): array {
+		if (!$bits) {
+			$shifted = 0;
+
+			return [];
+		}
+
+		$indexOffset = static::$indexOffset;
+		$minBit = min($bits);
+		$minBit -= $indexOffset;
+
+		if ($minBit < 0) {
+			throw new Exception('Each element in the $bits array should be >=0');
+		}
+
+		$maxBit = max($bits);
+		$maxBit -= $indexOffset;
+
+		$shifted = $shift ? ($minBit >> 3) : 0;
+		$shiftedBits = $shifted << 3;
+		$sizeInBytes = (($maxBit + 8) >> 3) - $shifted;
+
+		if ($sizeInBytes <= 0) {
+			return [];
+		}
+
+		$res = array_fill(0, $sizeInBytes, 0);
+		$reverseIndexBase = $sizeInBytes - 1;
+
+		foreach ($bits as $bit) {
+			$bit -= $indexOffset;
+			$bit -= $shiftedBits;
+
+			$res[$reverseIndexBase - ($bit >> 3)] |= 1 << ($bit & 7);
+		}
+
 		return $res;
 	}
-	
-	public static function toBinData(array $bits, $shift = false, &$shifted = 0) {
-		return call_user_func_array('pack', array_merge(['C*'], static::toBytes($bits, $shift, $shifted)));
+
+	/**
+	 * Convert bit indexes into packed binary string.
+	 *
+	 * @param array<int> $bits
+	 */
+	public static function toBinData(
+		array $bits,
+		bool $shift = false,
+		int &$shifted = 0
+	): string {
+		$bytes = static::toBytes($bits, $shift, $shifted);
+
+		if (!$bytes) {
+			return '';
+		}
+
+		return pack('C*', ...$bytes);
 	}
-	
-	public static function toBinString(array $bits, $split = false, $shift = false, &$shifted = 0) {
-		return implode($split ? ' ' : '', array_map(function ($byte) {
-			return substr('00000000'.decbin($byte), -8);
-		}, static::toBytes($bits, $shift, $shifted)));
+
+	/**
+	 * Convert bit indexes into binary string.
+	 *
+	 * @param array<int> $bits
+	 */
+	public static function toBinString(
+		array $bits,
+		bool $split = false,
+		bool $shift = false,
+		int &$shifted = 0
+	): string {
+		self::initTables();
+
+		$bytes = static::toBytes($bits, $shift, $shifted);
+		$count = count($bytes);
+
+		if ($count === 0) {
+			return '';
+		}
+
+		$pos = 0;
+		$parts = array_fill(0, $count, 0);
+
+		foreach ($bytes as $byte) {
+			$parts[$pos++] = self::$binTable[$byte];
+		}
+
+		return implode($split ? ' ' : '', $parts);
 	}
-	
-	public static function toHexString(array $bits, $split = false, $shift = false, &$shifted = 0) {
-		return implode($split ? ' ' : '', array_map(function ($byte) {
-			return substr('00'.dechex($byte), -2);
-		}, static::toBytes($bits, $shift, $shifted)));
+
+	/**
+	 * Convert bit indexes into hexadecimal string.
+	 *
+	 * @param array<int> $bits
+	 */
+	public static function toHexString(
+		array $bits,
+		bool $split = false,
+		bool $shift = false,
+		int &$shifted = 0
+	): string {
+		self::initTables();
+
+		$bytes = static::toBytes($bits, $shift, $shifted);
+		$count = count($bytes);
+
+		if ($count === 0) {
+			return '';
+		}
+
+		$pos = 0;
+		$parts = array_fill(0, $count, 0);
+
+		foreach ($bytes as $byte) {
+			$parts[$pos++] = self::$hexTable[$byte];
+		}
+
+		return implode($split ? ' ' : '', $parts);
 	}
-	
-	public static function fromBinData($data, $shifted = 0) {
+
+	/**
+	 * Decode packed binary string into bit indexes.
+	 *
+	 * @return array<int>
+	 */
+	public static function fromBinData(
+		string $data,
+		int $shifted = 0
+	): array {
+		if ($data === '') {
+			return [];
+		}
+
 		$res = [];
 		$sizeInBytes = strlen($data);
-		$data = unpack('C*', $data);
-		$sizeInBytes = count($data);
-		$shiftedBits = $shifted * 8;
-		for ($i = $sizeInBytes - 1; $i > -1; $i--) {
-			$byte = $data[$i + 1];
-			$bitIndex = 0;
-			while ($byte && $bitIndex < 8) {
-				if ($byte & 1)
-					$res[] = ($sizeInBytes - $i - 1) * 8 + $bitIndex + $shiftedBits;
-				$byte >>= 1;
-				$bitIndex++;
+		$basic = ($shifted << 3) + static::$indexOffset;
+		$bitIndexMap = [
+			1 => 0,
+			2 => 1,
+			4 => 2,
+			8 => 3,
+			16 => 4,
+			32 => 5,
+			64 => 6,
+			128 => 7,
+		];
+
+		for ($i = $sizeInBytes - 1; $i >= 0; $i--) {
+			$byte = ord($data[$i]);
+
+			if ($byte === 0) {
+				continue;
+			}
+
+			$base = (($sizeInBytes - $i - 1) << 3) + $basic;
+
+			while ($byte !== 0) {
+				$lsb = $byte & (-$byte);
+
+				$res[] = $base + $bitIndexMap[$lsb];
+
+				$byte ^= $lsb;
 			}
 		}
+
 		return $res;
 	}
-	
-	public static function getSqlCondition($column, $bit, $shiftColumn = null) {
-		if (!$shiftColumn)
+
+	/**
+	 * Generate SQL condition for testing a bit.
+	 */
+	public static function getSqlCondition(
+		string $column,
+		int $bit,
+		?string $shiftColumn = null
+	): string {
+		$bit -= static::$indexOffset;
+
+		if ($shiftColumn === null) {
 			return "ASCII(SUBSTR($column, -CEIL(($bit) / 8), 1)) & (1 << (($bit) % 8))";
-		else
-			return "ASCII(SUBSTR($column, -(CEIL(($bit) / 8) - $shiftColumn), 1)) & (1 << (($bit) % 8))";
+		}
+
+		return "ASCII(SUBSTR($column, -(CEIL(($bit) / 8) - $shiftColumn), 1)) & (1 << (($bit) % 8))";
 	}
 }
 
-class BinaryIds extends BinaryMask {
-	protected static function decrease($number) {
-		return $number - 1;
-	}
-	
-	protected static function increase($number) {
-		return $number + 1;
-	}
-	
-	public static function toBytes(array $ids, $shift = false, &$shifted = 0) {
-		return parent::toBytes(array_map('self::decrease', $ids), $shift, $shifted);
-	}
-	
-	public static function fromBinData($data, $shifted = 0) {
-		return array_map('self::increase', parent::fromBinData($data, $shifted));
-	}
-	
-	public static function getSqlCondition($column, $id, $shiftColumn = null) {
-		return parent::getSqlCondition($column, "$id - 1", $shiftColumn);
-	}
-	
+class BinaryIds extends BinaryMask
+{
+	protected static int $indexOffset = 1;
 }
