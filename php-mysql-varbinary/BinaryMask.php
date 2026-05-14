@@ -1,3 +1,7 @@
+<?php
+
+declare(strict_types=1);
+
 class BinaryMask
 {
 	protected static int $indexOffset = 0;
@@ -58,10 +62,10 @@ class BinaryMask
 
 		$res = array_fill(0, $sizeInBytes, 0);
 		$reverseIndexBase = $sizeInBytes - 1;
+		$adjust = $indexOffset + $shiftedBits;
 
 		foreach ($bits as $bit) {
-			$bit -= $indexOffset;
-			$bit -= $shiftedBits;
+			$bit -= $adjust;
 
 			$res[$reverseIndexBase - ($bit >> 3)] |= 1 << ($bit & 7);
 		}
@@ -109,13 +113,13 @@ class BinaryMask
 		}
 
 		$pos = 0;
-		$parts = array_fill(0, $count, 0);
+		$binTable = self::$binTable;
 
 		foreach ($bytes as $byte) {
-			$parts[$pos++] = self::$binTable[$byte];
+			$bytes[$pos++] = $binTable[$byte];
 		}
 
-		return implode($split ? ' ' : '', $parts);
+		return implode($split ? ' ' : '', $bytes);
 	}
 
 	/**
@@ -139,17 +143,19 @@ class BinaryMask
 		}
 
 		$pos = 0;
-		$parts = array_fill(0, $count, 0);
+		$hexTable = self::$hexTable;
 
 		foreach ($bytes as $byte) {
-			$parts[$pos++] = self::$hexTable[$byte];
+			$bytes[$pos++] = $hexTable[$byte];
 		}
 
-		return implode($split ? ' ' : '', $parts);
+		return implode($split ? ' ' : '', $bytes);
 	}
 
 	/**
 	 * Decode packed binary string into bit indexes.
+	 *
+	 * Optimized version.
 	 *
 	 * @return array<int>
 	 */
@@ -161,35 +167,40 @@ class BinaryMask
 			return [];
 		}
 
-		$res = [];
-		$sizeInBytes = strlen($data);
-		$basic = ($shifted << 3) + static::$indexOffset;
-		$bitIndexMap = [
-			1 => 0,
-			2 => 1,
-			4 => 2,
-			8 => 3,
-			16 => 4,
-			32 => 5,
-			64 => 6,
-			128 => 7,
-		];
+		static $decodeTable = null;
 
-		for ($i = $sizeInBytes - 1; $i >= 0; $i--) {
+		if ($decodeTable === null) {
+			$decodeTable = [];
+
+			for ($byte = 0; $byte < 256; $byte++) {
+				$bits = [];
+
+				for ($bit = 0; $bit < 8; $bit++) {
+					if ($byte & (1 << $bit)) {
+						$bits[] = $bit;
+					}
+				}
+
+				$decodeTable[$byte] = $bits;
+			}
+		}
+
+		$res = [];
+
+		$lastByte = strlen($data) - 1;
+		$base = ($shifted << 3) + static::$indexOffset;
+
+		for ($i = $lastByte; $i >= 0; $i--) {
 			$byte = ord($data[$i]);
 
 			if ($byte === 0) {
 				continue;
 			}
 
-			$base = (($sizeInBytes - $i - 1) << 3) + $basic;
+			$currentBase = (($lastByte - $i) << 3) + $base;
 
-			while ($byte !== 0) {
-				$lsb = $byte & (-$byte);
-
-				$res[] = $base + $bitIndexMap[$lsb];
-
-				$byte ^= $lsb;
+			foreach ($decodeTable[$byte] as $bit) {
+				$res[] = $currentBase + $bit;
 			}
 		}
 
